@@ -1,0 +1,78 @@
+import { NextRequest, NextResponse } from "next/server"
+import { auth } from "@/lib/auth"
+import { getS3Client } from "@/lib/s3"
+import { prisma } from "@/lib/db"
+import { rebuildUserExtensionStats } from "@/lib/file-stats"
+import { createFolderSchema } from "@/lib/validations"
+import { PutObjectCommand } from "@aws-sdk/client-s3"
+
+export async function POST(request: NextRequest) {
+  let userId: string | undefined
+  let auditBucket = ""
+  let auditFolderKey = ""
+  try {
+    const session = await auth()
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    }
+    userId = session.user.id
+
+    const body = await request.json()
+    const parsed = createFolderSchema.safeParse(body)
+
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: "Invalid parameters", details: parsed.error.flatten() },
+        { status: 400 }
+      )
+    }
+
+    const { bucket, credentialId, key } = parsed.data
+    auditBucket = bucket
+    const { client, credential } = await getS3Client(session.user.id, credentialId)
+
+    // Ensure key ends with /
+    const folderKey = key.endsWith("/") ? key : `${key}/`
+    auditFolderKey = folderKey
+
+    await client.send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: folderKey,
+        Body: "",
+      })
+    )
+
+    // Add FileMetadata entry for the folder
+    await prisma.fileMetadata.upsert({
+      where: {
+        credentialId_bucket_key: {
+          credentialId: credential.id,
+          bucket,
+          key: folderKey,
+        },
+      },
+      create: {
+        userId: session.user.id,
+        credentialId: credential.id,
+        bucket,
+        key: folderKey,
+        extension: "",
+        size: BigInt(0),
+        lastModified: new Date(),
+        isFolder: true,
+      },
+      update: {
+        extension: "",
+        lastModified: new Date(),
+      },
+    })
+
+    await rebuildUserExtensionStats(session.user.id)
+    return NextResponse.json({ key: folderKey })
+  } catch (error) {
+    console.error("Failed to create folder:", error)
+    if (userId) {    }
+    return NextResponse.json({ error: "Failed to create folder" }, { status: 500 })
+  }
+}

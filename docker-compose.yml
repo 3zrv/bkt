@@ -1,0 +1,45 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=${DATABASE_URL_DOCKER:-postgresql://s3admin:${POSTGRES_PASSWORD}@db:5432/s3_admin}
+      - ENCRYPTION_MASTER_KEY=${ENCRYPTION_MASTER_KEY}
+      - ENCRYPTION_SALT=${ENCRYPTION_SALT}
+      - NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
+      - SYSTEM_LOG_FILE_PATH=${SYSTEM_LOG_FILE_PATH:-/app/logs/system.log}
+      - THUMBNAIL_GENERATION_ENABLED=${THUMBNAIL_GENERATION_ENABLED:-true}
+      - THUMBNAIL_MAX_WIDTH=${THUMBNAIL_MAX_WIDTH:-480}
+      - BACKUP_S3_ENDPOINT=${BACKUP_S3_ENDPOINT:-}
+      - BACKUP_S3_ACCESS_KEY=${BACKUP_S3_ACCESS_KEY:-}
+      - BACKUP_S3_SECRET_KEY=${BACKUP_S3_SECRET_KEY:-}
+      - BACKUP_S3_BUCKET=${BACKUP_S3_BUCKET:-}
+      - BACKUP_SCHEDULE_CRON=${BACKUP_SCHEDULE_CRON:-0 */3 * * *}
+    volumes:
+      - app_logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:17
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=s3admin
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=s3_admin
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U s3admin -d s3_admin"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  app_logs:

@@ -1,0 +1,69 @@
+import { NextRequest, NextResponse } from "next/server"
+import { auth } from "@/lib/auth"
+import { getS3Client } from "@/lib/s3"
+import { s3OperationSchema } from "@/lib/validations"
+import { GetObjectCommand } from "@aws-sdk/client-s3"
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner"
+
+function extractFilename(key: string): string {
+  const normalized = key.endsWith("/") ? key.slice(0, -1) : key
+  const filename = normalized.split("/").pop() || "download"
+  return filename || "download"
+}
+
+function toContentDispositionFilename(filename: string): string {
+  return filename.replace(/["\\]/g, "_")
+}
+
+function shouldUseProxyDownload(provider: string): boolean {
+  return provider.trim().toUpperCase() === "STORADERA"
+}
+
+export async function POST(request: NextRequest) {
+  let userId: string | undefined
+  let auditBucket = ""
+  let auditKey = ""
+  try {
+    const session = await auth()
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    }
+    userId = session.user.id
+
+    const body = await request.json()
+    const parsed = s3OperationSchema.safeParse(body)
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: "Invalid parameters" },
+        { status: 400 }
+      )
+    }
+    const { bucket, key, credentialId } = parsed.data
+    auditBucket = bucket
+    auditKey = key
+
+    const { client, credential } = await getS3Client(session.user.id, credentialId)
+    const filename = extractFilename(key)
+
+    let url: string
+    if (shouldUseProxyDownload(credential.provider)) {
+      const params = new URLSearchParams({ bucket, key })
+      if (credentialId) {
+        params.set("credentialId", credentialId)
+      }
+      url = `/api/s3/download/proxy?${params.toString()}`
+    } else {
+      const commandInput: ConstructorParameters<typeof GetObjectCommand>[0] = {
+        Bucket: bucket,
+        Key: key,
+        ResponseContentDisposition: `attachment; filename="${toContentDispositionFilename(filename)}"`,
+      }
+      url = await getSignedUrl(client, new GetObjectCommand(commandInput), { expiresIn: 3600 })
+    }
+    return NextResponse.json({ url, filename })
+  } catch (error) {
+    console.error("Failed to generate download URL:", error)
+    if (userId) {    }
+    return NextResponse.json({ error: "Failed to generate download URL" }, { status: 500 })
+  }
+}
