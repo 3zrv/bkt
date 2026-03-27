@@ -4,18 +4,9 @@ import { useState, useEffect, useCallback } from "react"
 import { Columns2, Square } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
-import {
-  SandboxPane,
-  type SandboxPaneDropTarget,
-} from "@/components/sandbox/sandbox-pane"
-import { listBuckets, moveObjects, isCorsError } from "@/lib/sandbox/api"
+import { SandboxPane, type SandboxPaneDropTarget } from "@/components/sandbox/sandbox-pane"
+import { moveObjects } from "@/lib/sandbox/api"
 import type { SandboxCredential } from "@/lib/sandbox/store"
-
-interface BucketOption {
-  name: string
-  credentialId: string
-  credentialLabel: string
-}
 
 interface SandboxCommanderProps {
   credentials: SandboxCredential[]
@@ -24,24 +15,6 @@ interface SandboxCommanderProps {
 export function SandboxCommander({ credentials }: SandboxCommanderProps) {
   const [activePane, setActivePane] = useState<"left" | "right">("left")
   const [splitMode, setSplitMode] = useState(true)
-  const [buckets, setBuckets] = useState<BucketOption[]>([])
-  const [bucketsLoading, setBucketsLoading] = useState(false)
-
-  useEffect(() => {
-    if (credentials.length === 0) return
-    setBucketsLoading(true)
-    const fetches = credentials.map((cred) =>
-      listBuckets(cred.id).catch((err) => {
-        if (!isCorsError(err)) {
-          toast.error(`Failed to load buckets for "${cred.label}": ${err instanceof Error ? err.message : String(err)}`)
-        }
-        return [] as BucketOption[]
-      })
-    )
-    Promise.all(fetches)
-      .then((results) => setBuckets(results.flat()))
-      .finally(() => setBucketsLoading(false))
-  }, [credentials])
 
   const handleFilesDropped = useCallback(
     async (droppedFiles: { key: string; isFolder: boolean }[], target: SandboxPaneDropTarget) => {
@@ -80,7 +53,8 @@ export function SandboxCommander({ credentials }: SandboxCommanderProps) {
         target.tagName === "INPUT" ||
         target.tagName === "TEXTAREA" ||
         target.isContentEditable
-      ) return
+      )
+        return
       e.preventDefault()
       setActivePane((p) => (p === "left" ? "right" : "left"))
     }
@@ -111,8 +85,7 @@ export function SandboxCommander({ credentials }: SandboxCommanderProps) {
             paneId="left"
             isActive={activePane === "left"}
             onActivate={() => setActivePane("left")}
-            buckets={buckets}
-            bucketsLoading={bucketsLoading}
+            credentials={credentials}
             onFilesDropped={handleFilesDropped}
           />
         </div>
@@ -122,8 +95,7 @@ export function SandboxCommander({ credentials }: SandboxCommanderProps) {
               paneId="right"
               isActive={activePane === "right"}
               onActivate={() => setActivePane("right")}
-              buckets={buckets}
-              bucketsLoading={bucketsLoading}
+              credentials={credentials}
               onFilesDropped={handleFilesDropped}
             />
           </div>

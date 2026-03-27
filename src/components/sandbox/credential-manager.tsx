@@ -20,7 +20,7 @@ import {
 import { Loader2, Trash2, Star, Plus, AlertTriangle } from "lucide-react"
 import { toast } from "sonner"
 import { z } from "zod"
-import { PROVIDERS, type Provider } from "@/lib/providers"
+import { PROVIDERS, formatEndpoint, type Provider } from "@/lib/providers"
 import {
   saveCredential,
   deleteCredential,
@@ -191,17 +191,26 @@ function AddCredentialDialog({ open, onOpenChange, isFirst, onAdded }: AddCreden
 
   const providerConfig = PROVIDERS[provider as Provider]
 
+  function resolveEndpoint(p: string, r: string): string {
+    const cfg = PROVIDERS[p as Provider]
+    if (!cfg?.endpoint) return ""
+    // Cloudflare R2 needs an account ID — leave blank for user to fill
+    if (cfg.endpoint.includes("{accountId}")) return ""
+    if (cfg.endpoint.includes("{region}")) return formatEndpoint(p as Provider, r)
+    return cfg.endpoint
+  }
+
   function handleProviderChange(p: string) {
     setProvider(p)
     const cfg = PROVIDERS[p as Provider]
-    if (cfg.defaultRegion) setRegion(cfg.defaultRegion)
-    // Auto-fill endpoint if it has no placeholders
-    if (cfg.endpoint && !cfg.endpoint.includes("{")) {
-      setEndpoint(cfg.endpoint)
-    } else if (!cfg.endpoint.includes("{region}") || region) {
-      // leave endpoint for user to fill
-      setEndpoint("")
-    }
+    const defaultR = cfg.defaultRegion
+    setRegion(defaultR)
+    setEndpoint(resolveEndpoint(p, defaultR))
+  }
+
+  function handleRegionChange(r: string) {
+    setRegion(r)
+    setEndpoint(resolveEndpoint(provider, r))
   }
 
   function validate() {
@@ -234,7 +243,17 @@ function AddCredentialDialog({ open, onOpenChange, isFirst, onAdded }: AddCreden
       await client.send(new ListBucketsCommand({}))
       toast.success("Connection successful!")
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Connection failed")
+      const { isCorsError } = await import("@/lib/sandbox/api")
+      if (isCorsError(err)) {
+        // Service-level CORS (ListBuckets) is often not configured even on valid endpoints.
+        // Credentials may be correct — CORS is set up per-bucket when browsing.
+        toast.warning(
+          "CORS blocked the test request. Your credentials may still be valid — CORS is configured per-bucket when you first browse it.",
+          { duration: 6000 }
+        )
+      } else {
+        toast.error(err instanceof Error ? err.message : "Connection failed")
+      }
     }
     setTesting(false)
   }
@@ -331,7 +350,7 @@ function AddCredentialDialog({ open, onOpenChange, isFirst, onAdded }: AddCreden
             <div className="space-y-1">
               <Label htmlFor={`${uid}-region`}>Region</Label>
               {providerConfig?.regions.length > 0 ? (
-                <Select value={region} onValueChange={setRegion}>
+                <Select value={region} onValueChange={handleRegionChange}>
                   <SelectTrigger id={`${uid}-region`}>
                     <SelectValue placeholder="Select region" />
                   </SelectTrigger>

@@ -1,6 +1,9 @@
 services:
   app:
-    build: .
+    build:
+      context: .
+      args:
+        - NEXT_PUBLIC_SANDBOX_MODE=1
     ports:
       - "3000:3000"
     environment:

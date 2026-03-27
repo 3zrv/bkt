@@ -11,6 +11,9 @@ WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@latest --activate
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+# Bake sandbox flag into the bundle so middleware and client code can read it
+ARG NEXT_PUBLIC_SANDBOX_MODE=""
+ENV NEXT_PUBLIC_SANDBOX_MODE=$NEXT_PUBLIC_SANDBOX_MODE
 RUN npx prisma generate
 RUN --mount=type=cache,target=/app/.next/cache pnpm run build
 

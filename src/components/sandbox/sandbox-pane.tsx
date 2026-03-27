@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useCallback, useEffect, useRef, useId } from "react"
-import { RefreshCw, Upload, FolderPlus, ChevronRight, Home, X } from "lucide-react"
+import { RefreshCw, Upload, FolderPlus, ChevronRight, Home, X, Search } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -24,6 +24,7 @@ import { CorsGuide } from "@/components/sandbox/cors-guide"
 import { cn } from "@/lib/utils"
 import { formatSize } from "@/lib/format"
 import {
+  discoverBuckets,
   listObjects,
   deleteObjects,
   createFolder,
@@ -33,13 +34,8 @@ import {
   isCorsError,
   type UploadProgress,
 } from "@/lib/sandbox/api"
+import type { SandboxCredential } from "@/lib/sandbox/store"
 import type { S3Object } from "@/types"
-
-interface BucketOption {
-  name: string
-  credentialId: string
-  credentialLabel: string
-}
 
 export interface SandboxPaneDropTarget {
   bucket: string
@@ -51,8 +47,7 @@ interface SandboxPaneProps {
   paneId: string
   isActive: boolean
   onActivate: () => void
-  buckets: BucketOption[]
-  bucketsLoading: boolean
+  credentials: SandboxCredential[]
   onFilesDropped?: (
     files: { key: string; isFolder: boolean }[],
     target: SandboxPaneDropTarget
@@ -63,13 +58,19 @@ export function SandboxPane({
   paneId,
   isActive,
   onActivate,
-  buckets,
-  bucketsLoading,
+  credentials,
   onFilesDropped,
 }: SandboxPaneProps) {
   const uid = useId()
 
-  const [selectedBucketKey, setSelectedBucketKey] = useState("")
+  // Credential + bucket selection
+  const [credentialId, setCredentialId] = useState(credentials[0]?.id ?? "")
+  const [bucket, setBucket] = useState("")
+  const [bucketInput, setBucketInput] = useState("") // for manual entry
+  const [discoveredBuckets, setDiscoveredBuckets] = useState<string[]>([])
+  const [discovering, setDiscovering] = useState(false)
+
+  // File browsing
   const [prefix, setPrefix] = useState("")
   const [files, setFiles] = useState<S3Object[]>([])
   const [isLoading, setIsLoading] = useState(false)
@@ -83,16 +84,57 @@ export function SandboxPane({
   const [newFolderOpen, setNewFolderOpen] = useState(false)
   const [uploadOpen, setUploadOpen] = useState(false)
 
-  const selectedBucket = buckets.find(
-    (b) => `${b.credentialId}::${b.name}` === selectedBucketKey
-  )
-  const bucket = selectedBucket?.name ?? ""
-  const credentialId = selectedBucket?.credentialId ?? ""
+  // "select" = show discovered buckets dropdown; "manual" = show text input (default)
+  const [bucketMode, setBucketMode] = useState<"select" | "manual">("manual")
 
-  // Stable reference for load function
-  const loadRef = useRef({ bucket, credentialId, prefix })
-  loadRef.current = { bucket, credentialId, prefix }
+  // Auto-discover buckets via server proxy whenever credential changes
+  useEffect(() => {
+    if (!credentialId) return
+    let cancelled = false
+    setDiscovering(true)
+    setDiscoveredBuckets([])
+    setBucketMode("manual")
 
+    discoverBuckets(credentialId)
+      .then((names) => {
+        if (cancelled) return
+        if (names.length > 0) {
+          setDiscoveredBuckets(names)
+          setBucketMode("select")
+        }
+      })
+      .catch(() => { /* silently stay in manual mode */ })
+      .finally(() => { if (!cancelled) setDiscovering(false) })
+
+    return () => { cancelled = true }
+  }, [credentialId])
+
+  function handleCredentialChange(id: string) {
+    setBucket("")
+    setBucketInput("")
+    setPrefix("")
+    setFiles([])
+    setCredentialId(id) // triggers the discovery effect above
+  }
+
+  async function handleDiscover() {
+    if (!credentialId || discovering) return
+    setDiscovering(true)
+    try {
+      const names = await discoverBuckets(credentialId)
+      if (names.length === 0) {
+        toast.info("No buckets found for this credential")
+      } else {
+        setDiscoveredBuckets(names)
+        setBucketMode("select")
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to discover buckets")
+    }
+    setDiscovering(false)
+  }
+
+  // Load files whenever bucket / prefix changes
   const loadFiles = useCallback(async () => {
     if (!bucket || !credentialId) return
     setIsLoading(true)
@@ -113,6 +155,14 @@ export function SandboxPane({
   useEffect(() => {
     void loadFiles()
   }, [loadFiles])
+
+  function applyManualBucket() {
+    const name = bucketInput.trim()
+    if (!name) return
+    setBucket(name)
+    setPrefix("")
+    setSelectedKeys(new Set())
+  }
 
   const navigate = useCallback((file: S3Object) => {
     if (file.isFolder) {
@@ -151,7 +201,6 @@ export function SandboxPane({
     }
   }, [files, selectedKeys.size])
 
-  // Drag and drop (cross-pane copy)
   const handleDragOver = useCallback(
     (e: React.DragEvent) => {
       if (!e.dataTransfer.types.includes("application/x-commander-files")) return
@@ -210,75 +259,121 @@ export function SandboxPane({
       onDrop={handleDrop}
     >
       {/* Header */}
-      <div className="flex items-center gap-1 border-b bg-muted/30 px-2 py-1">
-        <Select
-          value={selectedBucketKey}
-          onValueChange={(v) => {
-            setSelectedBucketKey(v)
-            setPrefix("")
-            setSelectedKeys(new Set())
-            setFiles([])
-          }}
-        >
-          <SelectTrigger className="h-7 w-auto min-w-[140px] max-w-[200px] text-xs">
-            <SelectValue placeholder="Select bucket" />
-          </SelectTrigger>
-          <SelectContent>
-            {buckets.map((b) => (
-              <SelectItem key={`${b.credentialId}::${b.name}`} value={`${b.credentialId}::${b.name}`}>
-                {b.name}
-              </SelectItem>
-            ))}
-            {bucketsLoading && (
-              <SelectItem value="__loading" disabled>
-                Loading...
-              </SelectItem>
+      <div className="flex flex-col gap-1 border-b bg-muted/30 px-2 py-1">
+        {/* Row 1: credential selector + action buttons */}
+        <div className="flex items-center gap-1">
+          <Select
+            value={credentialId}
+            onValueChange={handleCredentialChange}
+          >
+            <SelectTrigger className="h-7 w-auto min-w-[120px] max-w-[160px] text-xs">
+              <SelectValue placeholder="Credential" />
+            </SelectTrigger>
+            <SelectContent>
+              {credentials.map((c) => (
+                <SelectItem key={c.id} value={c.id}>
+                  {c.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <div className="flex-1" />
+
+          {bucket && (
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0"
+                onClick={(e) => { e.stopPropagation(); setUploadOpen(true) }}
+                title="Upload"
+              >
+                <Upload className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0"
+                onClick={(e) => { e.stopPropagation(); setNewFolderOpen(true) }}
+                title="New folder"
+              >
+                <FolderPlus className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0"
+                onClick={(e) => { e.stopPropagation(); void loadFiles() }}
+                disabled={isLoading}
+                title="Refresh"
+              >
+                <RefreshCw className={cn("h-3.5 w-3.5", isLoading && "animate-spin")} />
+              </Button>
+            </>
+          )}
+        </div>
+
+        {/* Row 2: bucket input */}
+        {credentialId && (
+          <div className="flex items-center gap-1">
+            {bucketMode === "select" ? (
+              <>
+                <Select
+                  value={bucket}
+                  onValueChange={(v) => { setBucket(v); setPrefix(""); setSelectedKeys(new Set()) }}
+                >
+                  <SelectTrigger className="h-7 flex-1 text-xs">
+                    <SelectValue placeholder="Select bucket" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {discoveredBuckets.map((name) => (
+                      <SelectItem key={name} value={name}>{name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 w-7 p-0 shrink-0"
+                  onClick={(e) => { e.stopPropagation(); setBucketMode("manual") }}
+                  title="Enter bucket name manually"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </>
+            ) : (
+              <>
+                <Input
+                  className="h-7 flex-1 text-xs"
+                  placeholder="Bucket name"
+                  value={bucketInput}
+                  onChange={(e) => setBucketInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); applyManualBucket() } }}
+                  onClick={(e) => e.stopPropagation()}
+                />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={(e) => { e.stopPropagation(); applyManualBucket() }}
+                  disabled={!bucketInput.trim()}
+                >
+                  Go
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 w-7 p-0 shrink-0"
+                  onClick={(e) => { e.stopPropagation(); void handleDiscover() }}
+                  disabled={discovering}
+                  title="Discover buckets"
+                >
+                  <Search className={cn("h-3.5 w-3.5", discovering && "animate-pulse")} />
+                </Button>
+              </>
             )}
-          </SelectContent>
-        </Select>
-
-        <div className="flex-1" />
-
-        {bucket && (
-          <>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 w-7 p-0"
-              onClick={(e) => {
-                e.stopPropagation()
-                setUploadOpen(true)
-              }}
-              title="Upload"
-            >
-              <Upload className="h-3.5 w-3.5" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 w-7 p-0"
-              onClick={(e) => {
-                e.stopPropagation()
-                setNewFolderOpen(true)
-              }}
-              title="New folder"
-            >
-              <FolderPlus className="h-3.5 w-3.5" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 w-7 p-0"
-              onClick={(e) => {
-                e.stopPropagation()
-                void loadFiles()
-              }}
-              disabled={isLoading}
-              title="Refresh"
-            >
-              <RefreshCw className={cn("h-3.5 w-3.5", isLoading && "animate-spin")} />
-            </Button>
-          </>
+          </div>
         )}
       </div>
 
@@ -286,22 +381,14 @@ export function SandboxPane({
       {bucket && (
         <div className="flex items-center gap-0.5 border-b bg-muted/10 px-2 py-0.5 text-xs text-muted-foreground">
           <button
-            onClick={(e) => {
-              e.stopPropagation()
-              setPrefix("")
-              setSelectedKeys(new Set())
-            }}
+            onClick={(e) => { e.stopPropagation(); setPrefix(""); setSelectedKeys(new Set()) }}
             className="hover:text-foreground"
           >
             <Home className="h-3 w-3" />
           </button>
           <ChevronRight className="h-3 w-3" />
           <button
-            onClick={(e) => {
-              e.stopPropagation()
-              setPrefix("")
-              setSelectedKeys(new Set())
-            }}
+            onClick={(e) => { e.stopPropagation(); setPrefix(""); setSelectedKeys(new Set()) }}
             className="hover:text-foreground truncate"
           >
             {bucket}
@@ -312,11 +399,7 @@ export function SandboxPane({
               <span key={partPath} className="flex items-center gap-0.5">
                 <ChevronRight className="h-3 w-3" />
                 <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setPrefix(partPath)
-                    setSelectedKeys(new Set())
-                  }}
+                  onClick={(e) => { e.stopPropagation(); setPrefix(partPath); setSelectedKeys(new Set()) }}
                   className="hover:text-foreground truncate max-w-[100px]"
                 >
                   {part}
@@ -329,19 +412,38 @@ export function SandboxPane({
 
       {/* Content */}
       <div className="flex-1 overflow-auto">
-        {!bucket ? (
+        {!credentialId ? (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            Select a bucket
+            Select a credential
+          </div>
+        ) : !bucket ? (
+          <div className="flex h-full flex-col items-center justify-center gap-1 text-sm text-muted-foreground">
+            {bucketMode === "select" ? (
+              <span>Select a bucket</span>
+            ) : (
+              <>
+                <span>Enter a bucket name above and press Go</span>
+                {!discovering && discoveredBuckets.length === 0 && (
+                  <span className="text-xs">
+                    Can&apos;t find it? Try the{" "}
+                    <button
+                      className="underline underline-offset-2 hover:text-foreground"
+                      onClick={(e) => { e.stopPropagation(); void handleDiscover() }}
+                    >
+                      discover
+                    </button>{" "}
+                    button or type the exact name.
+                  </span>
+                )}
+              </>
+            )}
           </div>
         ) : corsError ? (
           <div className="p-4">
             <CorsGuide
               credentialId={credentialId}
               bucket={bucket}
-              onConfigured={() => {
-                setCorsError(false)
-                void loadFiles()
-              }}
+              onConfigured={() => { setCorsError(false); void loadFiles() }}
             />
           </div>
         ) : (
@@ -378,9 +480,7 @@ export function SandboxPane({
         <>
           <SandboxDeleteDialog
             open={!!deleteTarget}
-            onOpenChange={(open) => {
-              if (!open) setDeleteTarget(null)
-            }}
+            onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}
             item={deleteTarget}
             onConfirm={async () => {
               if (!deleteTarget) return
@@ -393,9 +493,7 @@ export function SandboxPane({
 
           <SandboxRenameDialog
             open={!!renameTarget}
-            onOpenChange={(open) => {
-              if (!open) setRenameTarget(null)
-            }}
+            onOpenChange={(open) => { if (!open) setRenameTarget(null) }}
             currentKey={renameTarget?.key ?? ""}
             isFolder={renameTarget?.isFolder ?? false}
             onConfirm={async (newName) => {
@@ -404,9 +502,7 @@ export function SandboxPane({
               const parent = parts.slice(0, -1).join("/")
               const parentPath = parent ? parent + "/" : ""
               const newKey = parentPath + newName + (renameTarget.isFolder ? "/" : "")
-              await moveObjects(credentialId, bucket, [
-                { from: renameTarget.key, to: newKey },
-              ])
+              await moveObjects(credentialId, bucket, [{ from: renameTarget.key, to: newKey }])
               toast.success("Renamed")
               setRenameTarget(null)
               void loadFiles()
@@ -598,9 +694,7 @@ function SandboxNewFolderDialog({
           <DialogTitle>New folder</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
-          {prefix && (
-            <p className="text-xs text-muted-foreground">Inside: {prefix}</p>
-          )}
+          {prefix && <p className="text-xs text-muted-foreground">Inside: {prefix}</p>}
           <div className="space-y-1">
             <Label htmlFor={`${uid}-folder`}>Folder name</Label>
             <Input
@@ -663,13 +757,7 @@ function SandboxUploadDialog({
     setUploading(true)
     abortRef.current = new AbortController()
 
-    const initialUploads = files.map((f) => ({
-      name: f.name,
-      progress: null,
-      done: false,
-      error: null,
-    }))
-    setUploads(initialUploads)
+    setUploads(files.map((f) => ({ name: f.name, progress: null, done: false, error: null })))
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i]
@@ -718,9 +806,7 @@ function SandboxUploadDialog({
           <DialogTitle>Upload files</DialogTitle>
         </DialogHeader>
 
-        {prefix && (
-          <p className="text-xs text-muted-foreground">Uploading to: {prefix}</p>
-        )}
+        {prefix && <p className="text-xs text-muted-foreground">Uploading to: {prefix}</p>}
 
         <div className="space-y-3">
           <input
@@ -766,19 +852,13 @@ function SandboxUploadDialog({
 
           <div className="flex justify-end gap-2">
             {uploading ? (
-              <Button
-                variant="outline"
-                onClick={() => abortRef.current?.abort()}
-              >
+              <Button variant="outline" onClick={() => abortRef.current?.abort()}>
                 <X className="mr-1.5 h-4 w-4" />
                 Cancel
               </Button>
             ) : (
               <>
-                <Button
-                  variant="outline"
-                  onClick={() => onOpenChange(false)}
-                >
+                <Button variant="outline" onClick={() => onOpenChange(false)}>
                   {allDone ? "Close" : "Cancel"}
                 </Button>
                 {!allDone && (

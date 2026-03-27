@@ -64,16 +64,16 @@ prisma/
 
 ### Key Files
 
-| File | Purpose |
-|------|---------|
-| `src/lib/s3.ts` | S3 client creation, endpoint normalization, credential decryption, client caching |
-| `src/lib/task-processor.ts` | Core logic for bulk delete, object transfer, and database backup tasks |
-| `src/lib/task-runner.ts` | Polls for due tasks and runs them in-process |
-| `src/components/dashboard/commander.tsx` | Dual-pane file manager with drag-and-drop between buckets |
-| `src/components/dashboard/commander-pane.tsx` | Single pane: bucket selector, file list, breadcrumbs, status bar |
-| `src/components/dashboard/toolbar.tsx` | Top navigation bar with page links and theme toggle |
-| `src/components/dashboard/file-browser.tsx` | File table with selection, sorting, context menu, drag support |
-| `src/components/dashboard/dashboard-overview.tsx` | Dashboard metrics and stats display |
+| File                                              | Purpose                                                                           |
+| ------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `src/lib/s3.ts`                                   | S3 client creation, endpoint normalization, credential decryption, client caching |
+| `src/lib/task-processor.ts`                       | Core logic for bulk delete, object transfer, and database backup tasks            |
+| `src/lib/task-runner.ts`                          | Polls for due tasks and runs them in-process                                      |
+| `src/components/dashboard/commander.tsx`          | Dual-pane file manager with drag-and-drop between buckets                         |
+| `src/components/dashboard/commander-pane.tsx`     | Single pane: bucket selector, file list, breadcrumbs, status bar                  |
+| `src/components/dashboard/toolbar.tsx`            | Top navigation bar with page links and theme toggle                               |
+| `src/components/dashboard/file-browser.tsx`       | File table with selection, sorting, context menu, drag support                    |
+| `src/components/dashboard/dashboard-overview.tsx` | Dashboard metrics and stats display                                               |
 
 ## Architecture Notes
 
@@ -113,7 +113,3 @@ Please use GitHub Issues to report bugs or request features. Include:
 - Steps to reproduce (for bugs)
 - Expected vs actual behavior
 - Environment details (OS, Node.js version, browser)
-
-## License
-
-By contributing, you agree that your contributions will be licensed under the AGPL-3.0 License.

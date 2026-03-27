@@ -21,6 +21,7 @@ Open-source, self-hosted S3 file manager for Hetzner, AWS, Cloudflare R2, Storad
 - **Dashboard Metrics** — File type breakdown, largest files, duplicates, recent activity
 - **Encrypted Credentials** — S3 keys encrypted at rest with AES-256-GCM
 - **No Auth Required** — Single-user, self-hosted — no login screens or accounts
+- **Sandbox Mode** — Browser-only mode at `/sandbox`: no database, credentials stored encrypted in IndexedDB
 
 ## Architecture
 
@@ -78,25 +79,56 @@ Open-source, self-hosted S3 file manager for Hetzner, AWS, Cloudflare R2, Storad
 ```
 src/
 ├── app/
-│   ├── (dashboard)/        # Dashboard pages (file browser, search, tasks, settings)
-│   ├── api/s3/             # S3 operations (buckets, objects, sync, upload, download, etc.)
-│   └── api/tasks/          # Task CRUD (create, list, pause/resume, delete)
+│   ├── (dashboard)/            # Dashboard pages (file browser, search, tasks, settings)
+│   ├── sandbox/                # Browser-only sandbox route (no auth, no DB)
+│   ├── api/s3/                 # S3 operations (buckets, objects, sync, upload, download, etc.)
+│   ├── api/tasks/              # Task CRUD (create, list, pause/resume, delete)
+│   └── api/sandbox/            # Sandbox helpers (discover-buckets proxy)
 ├── components/
-│   ├── dashboard/          # File browser, gallery, sidebar, upload dialog, etc.
-│   ├── providers/          # Theme, React Query providers
-│   └── ui/                 # Radix-based UI primitives (shadcn/ui)
+│   ├── dashboard/              # File browser, gallery, sidebar, upload dialog, etc.
+│   ├── sandbox/                # Sandbox-specific UI (pane, commander, credential manager, CORS guide)
+│   ├── providers/              # Theme, React Query providers
+│   └── ui/                     # Radix-based UI primitives (shadcn/ui)
 ├── lib/
-│   ├── auth.ts             # Hardcoded local user session
-│   ├── s3.ts               # S3 client factory with caching
-│   ├── crypto.ts           # AES-256-GCM encryption for credentials
-│   ├── task-processor.ts   # Core task execution logic (delete, transfer, backup)
-│   ├── task-runner.ts      # In-process interval-based task runner
-│   ├── task-schedule.ts    # Cron parsing and next-run calculation
-│   ├── upload-engine.ts    # Client-side multipart upload with pause/resume
-│   ├── file-search.ts      # SQL-based file search with filters
-│   └── file-stats.ts       # Extension stat aggregation
-└── instrumentation.ts      # App startup: ensure local user, start task runner
+│   ├── auth.ts                 # Hardcoded local user session
+│   ├── s3.ts                   # S3 client factory with caching
+│   ├── crypto.ts               # AES-256-GCM encryption for credentials
+│   ├── task-processor.ts       # Core task execution logic (delete, transfer, backup)
+│   ├── task-runner.ts          # In-process interval-based task runner
+│   ├── task-schedule.ts        # Cron parsing and next-run calculation
+│   ├── upload-engine.ts        # Client-side multipart upload with pause/resume
+│   ├── file-search.ts          # SQL-based file search with filters
+│   ├── file-stats.ts           # Extension stat aggregation
+│   └── sandbox/                # Sandbox library (browser-only)
+│       ├── crypto.ts           # Web Crypto device key + AES-256-GCM for IndexedDB credentials
+│       ├── store.ts            # IndexedDB credential + preference storage
+│       ├── client.ts           # Browser S3 client factory (mirrors src/lib/s3.ts)
+│       └── api.ts              # All S3 operations running directly in the browser
+├── middleware.ts               # Redirect all traffic to /sandbox when SANDBOX_MODE is set
+└── instrumentation.ts          # App startup: ensure local user, start task runner
 ```
+
+## Sandbox Mode
+
+The `/sandbox` route runs entirely in the browser — no database, no server-side credentials, no setup required.
+
+- S3 credentials are encrypted with AES-256-GCM using a device key stored in your browser (never sent to any server)
+- Every S3 operation (list, upload, delete, copy, rename, download) is a direct browser → S3 call
+- Bucket discovery is proxied through the Next.js server to avoid service-level CORS restrictions on `ListBuckets`
+- STORADERA is not supported in sandbox mode (requires a server proxy)
+
+**Limitations vs the full app:** no file preview, no background tasks, no gallery, no global search, no dashboard metrics.
+
+### Run sandbox-only (no database needed)
+
+```bash
+docker compose -f docker-compose.sandbox.yml up -d
+# Open http://localhost:3000/sandbox
+```
+
+The sandbox compose file builds with `NEXT_PUBLIC_SANDBOX_MODE=1` baked in. The middleware redirects all traffic to `/sandbox` and the app starts without `DATABASE_URL`.
+
+---
 
 ## Quick Start
 
@@ -142,19 +174,21 @@ npm run dev
 
 ## Environment Variables
 
-| Variable                       | Required | Description                                     |
-| ------------------------------ | -------- | ----------------------------------------------- |
-| `DATABASE_URL`                 | Yes      | PostgreSQL connection string                    |
-| `ENCRYPTION_MASTER_KEY`        | Yes      | 32-byte hex key for credential encryption       |
-| `ENCRYPTION_SALT`              | Yes      | 16-byte hex salt for key derivation             |
-| `NEXT_PUBLIC_SITE_URL`         | No       | Public URL (default: `http://localhost:3000`)   |
-| `THUMBNAIL_GENERATION_ENABLED` | No       | Enable image/video thumbnails (default: `true`) |
-| `THUMBNAIL_MAX_WIDTH`          | No       | Max thumbnail width in px (default: `480`)      |
-| `BACKUP_S3_ENDPOINT`           | No       | S3 endpoint for database backups                |
-| `BACKUP_S3_ACCESS_KEY`         | No       | Access key for backup bucket                    |
-| `BACKUP_S3_SECRET_KEY`         | No       | Secret key for backup bucket                    |
-| `BACKUP_S3_BUCKET`             | No       | Bucket name for backups                         |
-| `BACKUP_SCHEDULE_CRON`         | No       | Backup cron schedule (default: `0 */3 * * *`)   |
+| Variable                       | Required             | Description                                                          |
+| ------------------------------ | -------------------- | -------------------------------------------------------------------- |
+| `DATABASE_URL`                 | Yes (full mode)      | PostgreSQL connection string                                         |
+| `ENCRYPTION_MASTER_KEY`        | Yes (full mode)      | 32-byte hex key for credential encryption                            |
+| `ENCRYPTION_SALT`              | Yes (full mode)      | 16-byte hex salt for key derivation                                  |
+| `SANDBOX_MODE`                 | No                   | Set to `1` to start without a database (redirects to `/sandbox`)    |
+| `NEXT_PUBLIC_SANDBOX_MODE`     | No (build-time)      | Bake sandbox flag into the bundle for middleware routing             |
+| `NEXT_PUBLIC_SITE_URL`         | No                   | Public URL (default: `http://localhost:3000`)                        |
+| `THUMBNAIL_GENERATION_ENABLED` | No                   | Enable image/video thumbnails (default: `true`)                      |
+| `THUMBNAIL_MAX_WIDTH`          | No                   | Max thumbnail width in px (default: `480`)                           |
+| `BACKUP_S3_ENDPOINT`           | No                   | S3 endpoint for database backups                                     |
+| `BACKUP_S3_ACCESS_KEY`         | No                   | Access key for backup bucket                                         |
+| `BACKUP_S3_SECRET_KEY`         | No                   | Secret key for backup bucket                                         |
+| `BACKUP_S3_BUCKET`             | No                   | Bucket name for backups                                              |
+| `BACKUP_SCHEDULE_CRON`         | No                   | Backup cron schedule (default: `0 */3 * * *`)                        |
 
 ## Gallery Mode
 

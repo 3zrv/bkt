@@ -21,6 +21,8 @@ import {
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner"
 import { Upload } from "@aws-sdk/lib-storage"
 import { getSandboxClient } from "@/lib/sandbox/client"
+import { getCredential } from "@/lib/sandbox/store"
+import { getOrCreateDeviceKey, decryptField } from "@/lib/sandbox/crypto"
 import type { S3Object } from "@/types"
 
 // ---------------------------------------------------------------------------
@@ -54,6 +56,47 @@ export async function listBuckets(
     credentialId,
     credentialLabel: credential.label,
   }))
+}
+
+/**
+ * Discover buckets via the server-side proxy route.
+ *
+ * Unlike listBuckets(), this decrypts credentials in the browser and sends
+ * them to /api/sandbox/discover-buckets. The server makes the ListBuckets
+ * call (no browser CORS restrictions). Falls back gracefully when running
+ * as a static site (proxy unavailable).
+ */
+export async function discoverBuckets(credentialId: string): Promise<string[]> {
+  const credential = await getCredential(credentialId)
+  if (!credential) throw new Error("Credential not found")
+
+  const deviceKey = await getOrCreateDeviceKey()
+  const accessKeyId = await decryptField(deviceKey, credential.accessKeyEnc, credential.ivAccessKey)
+  const secretAccessKey = await decryptField(
+    deviceKey,
+    credential.secretKeyEnc,
+    credential.ivSecretKey
+  )
+
+  const res = await fetch("/api/sandbox/discover-buckets", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      endpoint: credential.endpoint,
+      region: credential.region,
+      provider: credential.provider,
+      accessKeyId,
+      secretAccessKey,
+    }),
+  })
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error((body as { error?: string }).error ?? "Failed to discover buckets")
+  }
+
+  const { buckets } = (await res.json()) as { buckets: string[] }
+  return buckets
 }
 
 // ---------------------------------------------------------------------------

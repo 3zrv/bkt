@@ -1,36 +1,36 @@
-"use client"
+"use client";
 
-import { useState, useEffect } from "react"
-import { Settings } from "lucide-react"
-import { Button } from "@/components/ui/button"
-import { Separator } from "@/components/ui/separator"
-import { SandboxCommander } from "@/components/sandbox/sandbox-commander"
-import { CredentialManager } from "@/components/sandbox/credential-manager"
-import { listCredentials, type SandboxCredential } from "@/lib/sandbox/store"
+import { useState, useEffect } from "react";
+import { Settings } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
+import { SandboxCommander } from "@/components/sandbox/sandbox-commander";
+import { CredentialManager } from "@/components/sandbox/credential-manager";
+import { listCredentials, type SandboxCredential } from "@/lib/sandbox/store";
 
-type View = "commander" | "credentials"
+type View = "commander" | "credentials";
 
 export function SandboxApp() {
-  const [credentials, setCredentials] = useState<SandboxCredential[]>([])
-  const [loaded, setLoaded] = useState(false)
-  const [view, setView] = useState<View>("commander")
+  const [credentials, setCredentials] = useState<SandboxCredential[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [view, setView] = useState<View>("commander");
 
   useEffect(() => {
     listCredentials()
       .then((creds) => {
-        setCredentials(creds)
+        setCredentials(creds);
         // Show credential manager on first visit
-        if (creds.length === 0) setView("credentials")
+        if (creds.length === 0) setView("credentials");
       })
-      .finally(() => setLoaded(true))
-  }, [])
+      .finally(() => setLoaded(true));
+  }, []);
 
   if (!loaded) {
     return (
       <div className="flex h-screen items-center justify-center text-sm text-muted-foreground">
         Loading...
       </div>
-    )
+    );
   }
 
   return (
@@ -43,7 +43,19 @@ export function SandboxApp() {
             browser-only
           </span>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-2">
+          <span className="hidden sm:inline text-[11px] text-muted-foreground">
+            Enjoying this?{" "}
+            <a
+              href="https://github.com/3zrv/bkt"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline underline-offset-2 hover:text-foreground"
+            >
+              Self-host
+            </a>{" "}
+            for file preview, tasks &amp; more.
+          </span>
           {view === "commander" && credentials.length > 0 && (
             <Button
               variant="ghost"
@@ -67,13 +79,15 @@ export function SandboxApp() {
             <CredentialManager
               credentials={credentials}
               onCredentialsChange={(creds) => {
-                setCredentials(creds)
+                setCredentials(creds);
                 // Switch to commander once first credential is added
                 if (creds.length > 0 && credentials.length === 0) {
-                  setView("commander")
+                  setView("commander");
                 }
               }}
-              onClose={credentials.length > 0 ? () => setView("commander") : undefined}
+              onClose={
+                credentials.length > 0 ? () => setView("commander") : undefined
+              }
             />
           </div>
         ) : (
@@ -81,5 +95,5 @@ export function SandboxApp() {
         )}
       </main>
     </div>
-  )
+  );
 }
