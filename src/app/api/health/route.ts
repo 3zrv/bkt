@@ -1,17 +1,21 @@
 import { NextResponse } from "next/server"
-import { prisma } from "@/lib/db"
 
 export async function GET() {
-  const checks: Record<string, "ok" | "error"> = {}
+  const checks: Record<string, "ok" | "error" | "n/a"> = {}
 
-  try {
-    await prisma.$queryRaw`SELECT 1`
-    checks.database = "ok"
-  } catch {
-    checks.database = "error"
+  if (process.env.SANDBOX_MODE) {
+    checks.database = "n/a"
+  } else {
+    const { prisma } = await import("@/lib/db")
+    try {
+      await prisma.$queryRaw`SELECT 1`
+      checks.database = "ok"
+    } catch {
+      checks.database = "error"
+    }
   }
 
-  const healthy = Object.values(checks).every((v) => v === "ok")
+  const healthy = Object.values(checks).every((v) => v === "ok" || v === "n/a")
 
   return NextResponse.json(
     { status: healthy ? "ok" : "degraded", checks },

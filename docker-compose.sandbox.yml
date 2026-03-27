@@ -1,0 +1,15 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - SANDBOX_MODE=1
+      - NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
+      - SYSTEM_LOG_FILE_PATH=${SYSTEM_LOG_FILE_PATH:-/app/logs/system.log}
+    volumes:
+      - app_logs:/app/logs
+    restart: unless-stopped
+
+volumes:
+  app_logs:
