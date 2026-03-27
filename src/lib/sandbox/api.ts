@@ -14,9 +14,6 @@ import {
   CopyObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
-  GetBucketCorsCommand,
-  PutBucketCorsCommand,
-  type CORSRule,
 } from "@aws-sdk/client-s3"
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner"
 import { Upload } from "@aws-sdk/lib-storage"
@@ -349,40 +346,34 @@ export const CORS_POLICY_SNIPPET = JSON.stringify(
 )
 
 export async function ensureCors(credentialId: string, bucket: string): Promise<void> {
-  const { client } = await getSandboxClient(credentialId)
+  // Route through the server proxy — the browser can't call PutBucketCors on a
+  // bucket that has no CORS configured yet (chicken-and-egg).
+  const credential = await getCredential(credentialId)
+  if (!credential) throw new Error("Credential not found")
 
-  // Fetch existing CORS config (may not exist)
-  let existingRules: CORSRule[] = []
-  try {
-    const existing = await client.send(new GetBucketCorsCommand({ Bucket: bucket }))
-    existingRules = existing.CORSRules ?? []
-  } catch {
-    // NoSuchCORSConfiguration is expected for new buckets
-  }
-
-  // Remove any existing sandbox rule and replace it
-  const otherRules = existingRules.filter((r) => r.ID !== CORS_RULE_ID)
-  const newRule = {
-    ID: CORS_RULE_ID,
-    AllowedOrigins: ["*"],
-    AllowedMethods: ["GET", "HEAD", "PUT", "POST", "DELETE"] as (
-      | "GET"
-      | "HEAD"
-      | "PUT"
-      | "POST"
-      | "DELETE"
-    )[],
-    AllowedHeaders: ["*"],
-    ExposeHeaders: ["ETag", "x-amz-request-id", "x-amz-version-id"],
-    MaxAgeSeconds: 3600,
-  }
-
-  await client.send(
-    new PutBucketCorsCommand({
-      Bucket: bucket,
-      CORSConfiguration: {
-        CORSRules: [...otherRules, newRule],
-      },
-    })
+  const deviceKey = await getOrCreateDeviceKey()
+  const accessKeyId = await decryptField(deviceKey, credential.accessKeyEnc, credential.ivAccessKey)
+  const secretAccessKey = await decryptField(
+    deviceKey,
+    credential.secretKeyEnc,
+    credential.ivSecretKey
   )
+
+  const res = await fetch("/api/sandbox/ensure-cors", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      endpoint: credential.endpoint,
+      region: credential.region,
+      provider: credential.provider,
+      accessKeyId,
+      secretAccessKey,
+      bucket,
+    }),
+  })
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error((body as { error?: string }).error ?? "Failed to configure CORS")
+  }
 }
