@@ -1,5 +1,6 @@
 export async function register() {
   if (process.env.NEXT_RUNTIME === "edge") return
+  if (process.env.SANDBOX_MODE) return
 
   const { prisma } = await import("./lib/db")
   const { setupServerErrorLogging } = await import("./lib/system-logger")
