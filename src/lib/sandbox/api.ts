@@ -1,26 +1,66 @@
 /**
  * Browser-native S3 API for the sandbox.
  *
- * Replaces every /api/s3/* server route with direct AWS SDK v3 calls that
- * run entirely in the browser. Credentials come from IndexedDB via the
- * sandbox client factory.
+ * Read/write bucket operations (list, delete, copy, move) are proxied through
+ * the Next.js server at /api/sandbox/proxy so they work regardless of whether
+ * the bucket has CORS configured. Only uploads go browser→S3 directly (via
+ * the @aws-sdk/lib-storage multipart engine) because streaming large files
+ * through the server is impractical.
  */
 
-import {
-  ListBucketsCommand,
-  ListObjectsV2Command,
-  DeleteObjectsCommand,
-  PutObjectCommand,
-  CopyObjectCommand,
-  DeleteObjectCommand,
-  GetObjectCommand,
-} from "@aws-sdk/client-s3"
+import { ListBucketsCommand, GetObjectCommand } from "@aws-sdk/client-s3"
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner"
 import { Upload } from "@aws-sdk/lib-storage"
 import { getSandboxClient } from "@/lib/sandbox/client"
 import { getCredential } from "@/lib/sandbox/store"
 import { getOrCreateDeviceKey, decryptField } from "@/lib/sandbox/crypto"
 import type { S3Object } from "@/types"
+
+// ---------------------------------------------------------------------------
+// Proxy helper — decrypts credentials and calls /api/sandbox/proxy
+// ---------------------------------------------------------------------------
+
+type ProxyAction =
+  | { action: "listObjects"; prefix: string }
+  | { action: "deleteObjects"; keys: string[] }
+  | { action: "createFolder"; folderKey: string }
+  | { action: "moveObjects"; ops: { from: string; to: string }[] }
+
+async function callProxy<T>(credentialId: string, bucket: string, action: ProxyAction): Promise<T> {
+  const credential = await getCredential(credentialId)
+  if (!credential) throw new Error("Credential not found")
+
+  const deviceKey = await getOrCreateDeviceKey()
+  const accessKeyId = await decryptField(deviceKey, credential.accessKeyEnc, credential.ivAccessKey)
+  const secretAccessKey = await decryptField(
+    deviceKey,
+    credential.secretKeyEnc,
+    credential.ivSecretKey
+  )
+
+  const res = await fetch("/api/sandbox/proxy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...action,
+      bucket,
+      credentials: {
+        endpoint: credential.endpoint,
+        region: credential.region,
+        provider: credential.provider,
+        accessKeyId,
+        secretAccessKey,
+      },
+    }),
+  })
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error((body as { error?: string }).error ?? "Operation failed")
+  }
+
+  return res.json() as Promise<T>
+}
 
 // ---------------------------------------------------------------------------
 // CORS detection
@@ -105,48 +145,7 @@ export async function listObjects(
   bucket: string,
   prefix: string
 ): Promise<{ folders: S3Object[]; files: S3Object[] }> {
-  const { client } = await getSandboxClient(credentialId)
-
-  const folders: S3Object[] = []
-  const files: S3Object[] = []
-  let continuationToken: string | undefined
-
-  do {
-    const res = await client.send(
-      new ListObjectsV2Command({
-        Bucket: bucket,
-        Prefix: prefix || undefined,
-        Delimiter: "/",
-        ContinuationToken: continuationToken,
-        MaxKeys: 1000,
-      })
-    )
-
-    for (const cp of res.CommonPrefixes ?? []) {
-      if (cp.Prefix) {
-        folders.push({
-          key: cp.Prefix,
-          size: 0,
-          lastModified: "",
-          isFolder: true,
-        })
-      }
-    }
-
-    for (const obj of res.Contents ?? []) {
-      if (!obj.Key || obj.Key === prefix) continue
-      files.push({
-        key: obj.Key,
-        size: obj.Size ?? 0,
-        lastModified: obj.LastModified?.toISOString() ?? "",
-        isFolder: false,
-      })
-    }
-
-    continuationToken = res.NextContinuationToken
-  } while (continuationToken)
-
-  return { folders, files }
+  return callProxy(credentialId, bucket, { action: "listObjects", prefix })
 }
 
 // ---------------------------------------------------------------------------
@@ -159,21 +158,7 @@ export async function deleteObjects(
   keys: string[]
 ): Promise<void> {
   if (keys.length === 0) return
-  const { client } = await getSandboxClient(credentialId)
-
-  // S3 DeleteObjects accepts max 1000 keys per request
-  for (let i = 0; i < keys.length; i += 1000) {
-    const batch = keys.slice(i, i + 1000)
-    await client.send(
-      new DeleteObjectsCommand({
-        Bucket: bucket,
-        Delete: {
-          Objects: batch.map((k) => ({ Key: k })),
-          Quiet: true,
-        },
-      })
-    )
-  }
+  await callProxy(credentialId, bucket, { action: "deleteObjects", keys })
 }
 
 // ---------------------------------------------------------------------------
@@ -183,66 +168,21 @@ export async function deleteObjects(
 export async function createFolder(
   credentialId: string,
   bucket: string,
-  prefix: string
+  folderKey: string
 ): Promise<void> {
-  const { client } = await getSandboxClient(credentialId)
-  const key = prefix.endsWith("/") ? prefix : prefix + "/"
-  await client.send(
-    new PutObjectCommand({
-      Bucket: bucket,
-      Key: key,
-      Body: "",
-      ContentLength: 0,
-    })
-  )
+  await callProxy(credentialId, bucket, { action: "createFolder", folderKey })
 }
 
 // ---------------------------------------------------------------------------
 // Copy / Move / Rename
 // ---------------------------------------------------------------------------
 
-export async function copyObject(
-  credentialId: string,
-  bucket: string,
-  fromKey: string,
-  toKey: string
-): Promise<void> {
-  const { client, endpoint } = await getSandboxClient(credentialId)
-  // CopySource must be URL-encoded bucket/key
-  const copySource = encodeURIComponent(`${bucket}/${fromKey}`)
-  await client.send(
-    new CopyObjectCommand({
-      Bucket: bucket,
-      CopySource: copySource,
-      Key: toKey,
-    })
-  )
-  void endpoint // used implicitly via client
-}
-
 export async function moveObjects(
   credentialId: string,
   bucket: string,
   ops: { from: string; to: string }[]
 ): Promise<void> {
-  const { client } = await getSandboxClient(credentialId)
-
-  for (const { from, to } of ops) {
-    const copySource = encodeURIComponent(`${bucket}/${from}`)
-    await client.send(
-      new CopyObjectCommand({
-        Bucket: bucket,
-        CopySource: copySource,
-        Key: to,
-      })
-    )
-    await client.send(
-      new DeleteObjectCommand({
-        Bucket: bucket,
-        Key: from,
-      })
-    )
-  }
+  await callProxy(credentialId, bucket, { action: "moveObjects", ops })
 }
 
 export async function renameObject(
