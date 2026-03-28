@@ -21,6 +21,16 @@ const SEO_KEYWORDS = [
   "S3-compatible storage",
   "self-hosted S3 admin",
   "object storage management",
+  "open source S3 manager",
+  "S3 file browser",
+  "S3 upload manager",
+  "MinIO file manager",
+  "Storadera manager",
+  "S3 dual pane",
+  "S3 bucket manager",
+  "S3 GUI",
+  "object storage browser",
+  "S3 web interface",
 ];
 
 const geistSans = Geist({

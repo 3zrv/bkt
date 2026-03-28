@@ -9,8 +9,9 @@ export function middleware(request: NextRequest) {
 
   const { pathname } = request.nextUrl
 
-  // Allow: sandbox itself, sandbox API routes, static assets, and health check
+  // Allow: landing page, sandbox, sandbox API routes, static assets, health check
   if (
+    pathname === "/" ||
     pathname.startsWith("/sandbox") ||
     pathname.startsWith("/_next") ||
     pathname.startsWith("/api/sandbox") ||
@@ -18,7 +19,9 @@ export function middleware(request: NextRequest) {
     pathname === "/favicon.ico" ||
     pathname === "/icon.svg" ||
     pathname === "/manifest.webmanifest" ||
-    pathname === "/robots.txt"
+    pathname === "/robots.txt" ||
+    pathname === "/sitemap.xml" ||
+    pathname === "/opengraph-image"
   ) {
     return NextResponse.next()
   }
